@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>Winger</title>
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Winger" />
+<meta name="theme-color" content="#101820" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.20/babel.min.js"></script>
+<style>
+  html,body{background:#101820;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+/* ---------------- localStorage wrapper (mirrors the Claude artifact storage API) ---------------- */
+const storage = {
+  async get(key) {
+    try { const v = localStorage.getItem(key); return v !== null ? { key, value: v } : null; }
+    catch (e) { return null; }
+  },
+  async set(key, value) {
+    try { localStorage.setItem(key, value); return { key, value }; }
+    catch (e) { return null; }
+  }
+};
+
+/* ---------------- minimal icon set (stroke style, lucide-inspired) ---------------- */
+function Icon({ size=18, color="currentColor", children }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color}
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+  );
+}
+const Check = (p) => <Icon {...p}><path d="M20 6 9 17l-5-5"/></Icon>;
+const Circle = (p) => <Icon {...p}><circle cx="12" cy="12" r="9"/></Icon>;
+const ChevronDown = (p) => <Icon {...p}><path d="m6 9 6 6 6-6"/></Icon>;
+const ChevronRight = (p) => <Icon {...p}><path d="m9 18 6-6-6-6"/></Icon>;
+const X = (p) => <Icon {...p}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></Icon>;
+const Plus = (p) => <Icon {...p}><path d="M12 5v14"/><path d="M5 12h14"/></Icon>;
+const Minus = (p) => <Icon {...p}><path d="M5 12h14"/></Icon>;
+const Flame = (p) => <Icon {...p}><path d="M12 2c1 4-3 5-3 9a3 3 0 0 0 6 0c0-2-1-3-1-3s2 1 2 4a5 5 0 0 1-10 0c0-5 4-6 6-10z"/></Icon>;
+const Droplet = (p) => <Icon {...p}><path d="M12 2s6 7 6 12a6 6 0 0 1-12 0c0-5 6-12 6-12z"/></Icon>;
+const Trophy = (p) => <Icon {...p}><path d="M7 4h10v3a5 5 0 0 1-10 0V4z"/><path d="M7 4H4v1a4 4 0 0 0 3 3.87"/><path d="M17 4h3v1a4 4 0 0 1-3 3.87"/><path d="M12 12v5"/><path d="M8 21h8"/><path d="M10 17h4v4h-4z"/></Icon>;
+const Dumbbell = (p) => <Icon {...p}><circle cx="6" cy="12" r="3"/><circle cx="18" cy="12" r="3"/><path d="M9 12h6"/></Icon>;
+const Utensils = (p) => <Icon {...p}><path d="M7 2v7a2 2 0 0 0 4 0V2"/><path d="M9 9v13"/><path d="M17 2c-1.2 0-2 2.2-2 5s.8 5 2 5 2-2.2 2-5-.8-5-2-5z"/><path d="M17 12v10"/></Icon>;
+const Video = (p) => <Icon {...p}><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4V8z"/></Icon>;
+const CalendarDays = (p) => <Icon {...p}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M3 11h18"/></Icon>;
+const Zap = (p) => <Icon {...p}><path d="M13 2 3 14h7l-1 8 11-14h-7l1-6z"/></Icon>;
+const Bell = (p) => <Icon {...p}><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 21a2 2 0 0 0 4 0"/></Icon>;
+const TrendingUp = (p) => <Icon {...p}><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></Icon>;
+
+/* ============================================================
+   PROGRAM DATA
+   ============================================================ */
+const PROGRAM_START = new Date(2026, 7, 22); // official restart: Sat Aug 22 2026
+const SEM_START = new Date(2026, 7, 24);
+const CALC_START = new Date(2026, 8, 8);
+const MUSIC_START = new Date(2026, 8, 21);
+const END_WEEK9 = new Date(2026, 9, 24); // 9 weeks after restart
+const HALLOWEEN = new Date(2026, 9, 31);
+
+function fmt(d) {
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+}
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
+function mondayIndex(d) { const j = d.getDay(); return j === 0 ? 6 : j - 1; }
+
+function parseHM(str) { const [h, m] = str.split(":").map(Number); return { h, m }; }
+function timeOnDate(date, hhmm) { const { h, m } = parseHM(hhmm); const d = new Date(date); d.setHours(h, m, 0, 0); return d; }
+function parseClockAmPm(str, date) {
+  const m = /(\d+):(\d+)\s*(am|pm)/i.exec(str);
+  if (!m) return null;
+  let h = parseInt(m[1], 10); const min = parseInt(m[2], 10); const ap = m[3].toLowerCase();
+  if (ap === "pm" && h !== 12) h += 12;
+  if (ap === "am" && h === 12) h = 0;
+  const d = new Date(date); d.setHours(h, min, 0, 0); return d;
+}
+function fmtTime(d) { return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
+function fmtCountdown(ms) {
+  if (ms <= 0) return "0:00";
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}` : `${m}:${String(sec).padStart(2,"0")}`;
+}
+function waterGoalFor(d) {
+  const t = macroTargetFor(d);
+  if (t.label === "Rest Day") return 90;
+  if (t.label === "Single-Session Day") return 110;
+  return 125;
+}
+function waterCheckpoints(date, settings) {
+  const wake = timeOnDate(date, settings.waterWake);
+  const sleep = timeOnDate(date, settings.waterSleep);
+  const goal = waterGoalFor(date);
+  const totalMin = Math.max(1, (sleep - wake) / 60000);
+  const n = Math.max(1, Math.ceil(goal / settings.waterCheckpointOz));
+  const points = [];
+  for (let i = 1; i <= n; i++) {
+    const t = new Date(wake.getTime() + (totalMin * i / n) * 60000);
+    points.push({ time: t, target: Math.round(goal * i / n) });
+  }
+  return { points, goal, wake, sleep };
+}
+function waterPaceTarget(now, wake, sleep, goal) {
+  if (now <= wake) return 0;
+  if (now >= sleep) return goal;
+  return Math.round(goal * (now - wake) / (sleep - wake));
+}
+
+const CATEGORIES = {
+  A: { title: "Speed / Acceleration", time: "35–45 min", color: "#F2B705",
+    exercises: ["3-point or 2-point starts: 6x10m max effort, 90s recovery","Half-kneeling starts: 4x10m/side","Resisted starts (band/partner/sled): 4x10m","Falling/reactive starts: 4x15m","Flying 20s (10m build + 20m top speed): 3–4 reps","Cool-down: 5min jog + stretch"]},
+  B: { title: "Gym: Explosive Lower", time: "55–65 min", color: "#E8593D",
+    exercises: ["Trap bar deadlift or back squat: 4x4–6, fast bar speed","Bulgarian split squat or walking lunge: 3x8/leg","Box jumps or broad jumps: 4x4, full recovery","Hip thrust: 3x8","Nordic hamstring curl: 3x6–8","Core: plank 45s, Pallof press 10/side, hanging knee raise x10 — 3 rounds"]},
+  C: { title: "Gym: Upper/Core + Power", time: "45–55 min", color: "#E8593D",
+    exercises: ["Med-ball rotational throw: 4x5/side","Bench press or push-up: 3x6–8","Weighted pull-up or lat pulldown: 3x8","Single-arm row: 3x10/side","Rotator cuff prehab band work: 2x12","Core circuit: side plank, dead bug, anti-rotation press — 3 rounds"]},
+  D: { title: "Field: Technical/Tactical", time: "75–90 min", color: "#2E7D5B",
+    exercises: ["15min ball mastery, both feet","20min 1v1 moves into a cone-gate/small goal at speed","20min crossing & cutback finishing, both feet","15–20min combination play or rebounder/wall work"]},
+  E: { title: "Conditioning: RSA/Intervals", time: "25–35 min", color: "#F2B705",
+    exercises: ["Wks 1–2: 6–8 x 400m @ 75–80%, 90s rest","Wks 3+: 10–12 x 30m sprint / 30s walk-back","Progress every 2 weeks — quality over volume"]},
+  F: { title: "Field: Long Session + RSA", time: "110–150 min", color: "#2E7D5B",
+    exercises: ["30min technical warm-up + moves","40min small-sided games or solo possession/finishing circuit","20min crossing/finishing at game tempo","20min RSA: 12–15 x 20m shuttle, 20s rest"]},
+  G: { title: "Match-Sim / Conditioning", time: "60–75 min", color: "#E8593D",
+    exercises: ["Small-sided games / pickup / futsal if available","No pickup: 20min possession/finishing + 30min intervals (4min hard/2min easy x5)"]},
+  H: { title: "Light Add-On", time: "20–40 min", color: "#5B7DB1",
+    exercises: ["Core/mobility circuit, ball mastery top-up, or light finishing touches","Kept low-fatigue — doesn't cannibalize the main session"]},
+  I: { title: "Active Recovery", time: "30–40 min", color: "#5B7DB1",
+    exercises: ["15–20min easy bike or walk/light jog","15–20min mobility & foam rolling — hips/hamstrings/calves","Log weight + watch this week's video"]},
+};
+
+const TEMPLATES = {
+  A: { 0:[["7:00am","A"],["9:00am","B"]], 1:[["8:00am","D"],["5:00pm","E"]], 2:[["8:00am","C"],["5:00pm","D"]], 3:[["8:00am","A"],["5:00pm","E"]], 4:[["9:00am","F"],["12:30pm","H"]], 5:[["9:00am","G"],["12:00pm","H"]], 6:[["flex","I"]] },
+  B: { 0:[["7:00am","A"],["3:30pm","B"]], 1:[["11:30am","C"],["6:00pm","H"]], 2:[["8:00am","D"],["1:00pm","B"],["5:00pm","E"]], 3:[["5:00pm","C"]], 4:[["9:00am","F"],["12:30pm","H"]], 5:[["9:00am","G"],["12:00pm","H"]], 6:[["flex","I"]] },
+  C: { 0:[["7:00am","A"],["4:45pm","H"]], 1:[["11:30am","B"],["6:00pm","H"]], 2:[["8:00am","D"],["5:00pm","C"]], 3:[["5:00pm","E"]], 4:[["9:00am","F"],["12:30pm","H"]], 5:[["9:00am","G"],["12:00pm","H"]], 6:[["flex","I"]] },
+};
+TEMPLATES.D = TEMPLATES.C;
+
+function classesFor(d) {
+  const items = []; const wd = mondayIndex(d);
+  if (d >= SEM_START) {
+    if (wd === 0) items.push("Accounting 6–8pm");
+    if (wd === 1) { items.push("Econ 8–9:25am"); items.push("Oceanography 9:35–11am"); }
+    if (wd === 3) items.push("Oceanography 9:35am–2:20pm");
+    if ((wd === 0 || wd === 2) && d >= CALC_START) items.push("Calc I 1:25–4:30pm");
+    if (wd === 6 && d >= MUSIC_START) items.push("Music Appr. (online, flexible)");
+  }
+  return items;
+}
+function periodFor(d) { if (d < SEM_START) return "A"; if (d < CALC_START) return "B"; if (d < MUSIC_START) return "C"; return "D"; }
+function weekNumberFor(d) { const diff = Math.floor((d - PROGRAM_START) / 86400000); return Math.floor(diff / 7) + 1; }
+function sessionsFor(d) { const wd = mondayIndex(d); const per = periodFor(d); return (TEMPLATES[per] && TEMPLATES[per][wd]) || TEMPLATES.D[wd]; }
+function macroTargetFor(d) {
+  const wd = mondayIndex(d);
+  if (wd === 6) return { cal: 2300, protein: 155, carb: 185, fat: 75, label: "Rest Day" };
+  if (wd === 3) return { cal: 2550, protein: 155, carb: 270, fat: 70, label: "Single-Session Day" };
+  return { cal: 2700, protein: 155, carb: 315, fat: 70, label: "Double-Session Day" };
+}
+
+const RECIPES = [
+  { id:"eggs-oats", meal:"breakfast", name:"3-Egg Scramble + Oats", cal:660, protein:34, carb:70, fat:22, ing:["3 whole eggs + 2 egg whites","1.25 cups oats","1 banana","cinnamon"], steps:"Scramble eggs over medium heat. Cook oats with water or milk, top with sliced banana + cinnamon." },
+  { id:"omelet", meal:"breakfast", name:"4-Egg Veggie Omelet + Toast", cal:480, protein:30, carb:32, fat:24, ing:["4 eggs","handful spinach/peppers","1 slice whole-wheat toast"], steps:"Whisk eggs, cook with veg folded in. Serve with toast." },
+  { id:"yogurt-bowl", meal:"breakfast", name:"Greek Yogurt Power Bowl", cal:420, protein:38, carb:48, fat:8, ing:["1.5 cups Greek yogurt","1/2 cup granola or oats","berries","honey"], steps:"Layer yogurt, berries, oats, drizzle honey." },
+  { id:"chicken-rice", meal:"lunch", name:"Chicken Thigh + Rice Bowl", cal:700, protein:48, carb:78, fat:18, ing:["6oz chicken thigh","1.5 cups rice","1 cup mixed veg","1 tbsp olive oil"], steps:"Grill or pan-sear chicken. Serve over rice with steamed veg, drizzle oil." },
+  { id:"tuna-rice", meal:"lunch", name:"Tuna Rice Bowl", cal:560, protein:42, carb:62, fat:12, ing:["2 cans tuna","1 cup rice","mixed veg","olive oil"], steps:"Mix tuna into warm rice and veg, drizzle oil, season." },
+  { id:"turkey-wrap", meal:"lunch", name:"Ground Turkey Tortilla Wraps", cal:640, protein:44, carb:58, fat:20, ing:["6oz ground turkey (93/7)","2 whole-wheat tortillas","salsa","shredded lettuce"], steps:"Brown turkey with taco seasoning, wrap in tortillas with salsa + lettuce." },
+  { id:"turkey-potato", meal:"dinner", name:"Turkey + Sweet Potato + Salad", cal:640, protein:42, carb:56, fat:20, ing:["6oz ground turkey (93/7)","1 medium sweet potato","big salad","1 tbsp dressing"], steps:"Brown turkey, roast or microwave sweet potato, toss salad with dressing." },
+  { id:"chicken-beans", meal:"dinner", name:"Chicken Breast + Black Beans", cal:560, protein:46, carb:48, fat:14, ing:["5oz chicken breast","1 cup black beans","salad","salsa"], steps:"Grill chicken, warm beans, build a bowl with salad + salsa." },
+  { id:"turkey-rice-dinner", meal:"dinner", name:"Turkey Rice Skillet", cal:680, protein:45, carb:70, fat:18, ing:["6oz ground turkey","1.5 cups rice","frozen veg","soy sauce"], steps:"Brown turkey, add cooked rice + veg, splash of soy sauce, stir-fry 5min." },
+  { id:"shake", meal:"snack", name:"Whey + Milk Shake", cal:260, protein:30, carb:20, fat:6, ing:["1 scoop whey protein","1 cup milk","honey"], steps:"Blend or shake." },
+  { id:"yogurt-berries", meal:"snack", name:"Greek Yogurt + Berries", cal:180, protein:18, carb:22, fat:2, ing:["1 cup Greek yogurt","1/2 cup berries"], steps:"Combine and eat." },
+  { id:"pb-apple", meal:"snack", name:"Apple + Peanut Butter", cal:280, protein:8, carb:32, fat:16, ing:["1 apple","2 tbsp peanut butter"], steps:"Slice apple, dip in peanut butter." },
+  { id:"rice-cake", meal:"snack", name:"Rice Cake + Banana (pre-workout)", cal:180, protein:3, carb:40, fat:1, ing:["2 rice cakes","1 banana"], steps:"Eat 30–45min before training." },
+  { id:"cottage-cheese", meal:"before bed", name:"Cottage Cheese + Berries", cal:180, protein:22, carb:14, fat:4, ing:["1 cup cottage cheese","1/2 cup berries"], steps:"Combine — slow-digesting protein for overnight recovery." },
+];
+
+const LEVELS = [
+  { min:0, title:"Trialist" }, { min:150, title:"Academy Prospect" }, { min:400, title:"Rising Starter" },
+  { min:800, title:"First Team Regular" }, { min:1500, title:"Team Captain" }, { min:2500, title:"D1-Ready" }, { min:4000, title:"Pro Prospect" },
+];
+function levelFor(xp) {
+  let cur = LEVELS[0], next = LEVELS[1];
+  for (let i=0;i<LEVELS.length;i++){ if (xp >= LEVELS[i].min) { cur = LEVELS[i]; next = LEVELS[i+1] || null; } }
+  return { cur, next };
+}
+
+const YT = [
+  { wk:1, sun:["Every Football Winger Role Explained","https://www.youtube.com/watch?v=KqpOaFKpMng"], tue:["3 Winger Finishing Drills (7mlc)","https://www.youtube.com/watch?v=KSTkSueOqWw"] },
+  { wk:2, sun:["Individual Technical Training For Wingers (7mlc)","https://www.youtube.com/watch?v=5yk3Gd2arzI"], tue:["10 Easy 1v1 Skills (AllAttack)","https://www.youtube.com/watch?v=RCA8A9ainIA"] },
+  { wk:3, sun:["Ball Mastery Homework, 30 Drills (Coerver)","https://www.youtube.com/watch?v=IeMYh7roBjk"], tue:["Winger Dribbling Drill (7mlc)","https://www.youtube.com/watch?v=zM6hAuiLH7Q"] },
+  { wk:4, sun:["Every 1v1 Skill Move (AllAttack)","https://www.youtube.com/watch?v=YjoV7UH_0ZM"], tue:["5 Shooting Drills For Wingers (7mlc)","https://www.youtube.com/watch?v=vwk53EIM5AM"] },
+  { wk:5, sun:["If You're A Winger, This Video Will Change How You Play","https://www.youtube.com/watch?v=YUT9z709XUk"], tue:["Winger Finishing, Different Angles (7mlc)","https://www.youtube.com/watch?v=0ZdkL8UkDX4"] },
+  { wk:6, sun:["Dribbling For Beginners (Coerver)","https://www.youtube.com/watch?v=moolvhxe_oc"], tue:["3 Drills For Wingers (7mlc)","https://www.youtube.com/watch?v=M8bUqRy73GQ"] },
+  { wk:7, sun:["Mastering Winger Finishes (7mlc)","https://www.youtube.com/watch?v=vmzNAB4PX9I"], tue:["The 10 Best 1v1 Skills (AllAttack)","https://www.youtube.com/watch?v=U8WCRz0Yh4Q"] },
+  { wk:8, sun:["Repeat Week 1 video — compare your game now","https://www.youtube.com/watch?v=KqpOaFKpMng"], tue:["7 Winger Finishing Drills","https://www.youtube.com/watch?v=QaVbfE8pTtQ"] },
+  { wk:9, sun:["Repeat Week 4 video — assess vs re-test","https://www.youtube.com/watch?v=YjoV7UH_0ZM"], tue:["Pick a favorite to repeat"] },
+];
+
+function targetSearchUrl(query) {
+  return `https://www.target.com/s?searchTerm=${encodeURIComponent(query)}`;
+}
+
+const MEAL_PREP = {
+  prepSession: [
+    { task: "Grill or bake chicken thighs", detail: "6\u20138 thighs \u2014 covers Mon\u2013Thu lunches" },
+    { task: "Cook a big batch of rice", detail: "6 cups dry \u2192 splits across lunches and Tue/Fri/Sat dinners" },
+    { task: "Brown 2lb ground turkey", detail: "Season half for wraps, half for dinner bowls" },
+    { task: "Roast sweet potatoes", detail: "4\u20136 medium, halved, 400\u00b0F for 35\u201340 min" },
+    { task: "Hard-boil or scramble a dozen eggs", detail: "Grab-and-go breakfast protein for the week" },
+    { task: "Portion overnight oats", detail: "3\u20134 mason jars \u2014 oats + milk, grab from the fridge" },
+    { task: "Wash & chop salad greens/veg", detail: "Store in containers with paper towel to keep crisp" },
+    { task: "Pre-portion snacks", detail: "Bag whey scoops, pair apples with PB, portion yogurt cups" },
+  ],
+  weekMap: {
+    Mon: { breakfast:"eggs-oats", lunch:"chicken-rice", dinner:"chicken-beans", snack:"shake" },
+    Tue: { breakfast:"omelet", lunch:"chicken-rice", dinner:"turkey-rice-dinner", snack:"yogurt-berries" },
+    Wed: { breakfast:"eggs-oats", lunch:"chicken-rice", dinner:"turkey-potato", snack:"pb-apple" },
+    Thu: { breakfast:"omelet", lunch:"chicken-rice", dinner:"chicken-beans", snack:"shake" },
+    Fri: { breakfast:"eggs-oats", lunch:"turkey-wrap", dinner:"turkey-rice-dinner", snack:"rice-cake" },
+    Sat: { breakfast:"yogurt-bowl", lunch:"turkey-wrap", dinner:"turkey-rice-dinner", snack:"yogurt-berries" },
+    Sun: { breakfast:"yogurt-bowl", lunch:"turkey-wrap", dinner:"turkey-potato", snack:"shake" },
+  },
+};
+
+const GROCERY_LIST = [
+  { id:"eggs", name:"Eggs (18-count)", cat:"Protein", price:6.50, freq:"weekly", serving:"1 egg", cal:70, protein:6, carb:0.5, fat:5 },
+  { id:"egg-whites", name:"Egg whites (carton)", cat:"Protein", price:4.50, freq:"weekly", serving:"1/4 cup", cal:25, protein:5, carb:0, fat:0 },
+  { id:"chicken-thigh", name:"Chicken thighs (family pack)", cat:"Protein", price:10.00, freq:"weekly", serving:"4oz cooked", cal:210, protein:26, carb:0, fat:11 },
+  { id:"chicken-breast", name:"Chicken breast (family pack)", cat:"Protein", price:13.00, freq:"weekly", serving:"4oz cooked", cal:165, protein:31, carb:0, fat:3.5 },
+  { id:"ground-turkey", name:"Ground turkey 93/7 (2lb)", cat:"Protein", price:9.50, freq:"weekly", serving:"4oz cooked", cal:170, protein:22, carb:0, fat:9 },
+  { id:"canned-tuna", name:"Canned tuna (4-pack)", cat:"Protein", price:6.50, freq:"weekly", serving:"1 can drained", cal:120, protein:26, carb:0, fat:1 },
+  { id:"greek-yogurt", name:"Greek yogurt (32oz tub)", cat:"Protein", price:6.50, freq:"weekly", serving:"1 cup", cal:150, protein:22, carb:9, fat:4 },
+  { id:"cottage-cheese", name:"Cottage cheese (16oz)", cat:"Protein", price:4.50, freq:"weekly", serving:"1 cup", cal:220, protein:25, carb:8, fat:9 },
+  { id:"whey", name:"Whey protein (2lb tub)", cat:"Protein", price:32.00, freq:"staple", serving:"1 scoop", cal:120, protein:24, carb:3, fat:1 },
+  { id:"black-beans", name:"Black beans (2 cans)", cat:"Protein", price:3.00, freq:"weekly", serving:"1 cup cooked", cal:225, protein:15, carb:40, fat:1 },
+  { id:"rice", name:"White or jasmine rice (5lb bag)", cat:"Carbs", price:7.00, freq:"staple", serving:"1 cup cooked", cal:205, protein:4, carb:45, fat:0.5 },
+  { id:"oats", name:"Rolled oats (42oz)", cat:"Carbs", price:5.00, freq:"staple", serving:"1/2 cup dry", cal:150, protein:5, carb:27, fat:3 },
+  { id:"sweet-potato", name:"Sweet potatoes (3lb bag)", cat:"Carbs", price:4.50, freq:"weekly", serving:"1 medium", cal:112, protein:2, carb:26, fat:0 },
+  { id:"tortillas", name:"Whole-wheat tortillas", cat:"Carbs", price:3.50, freq:"weekly", serving:"1 tortilla", cal:110, protein:3, carb:18, fat:3 },
+  { id:"toast-bread", name:"Whole-wheat bread", cat:"Carbs", price:4.00, freq:"weekly", serving:"1 slice", cal:80, protein:4, carb:14, fat:1 },
+  { id:"rice-cakes", name:"Rice cakes", cat:"Carbs", price:3.50, freq:"weekly", serving:"1 cake", cal:35, protein:1, carb:7, fat:0 },
+  { id:"granola", name:"Granola", cat:"Carbs", price:5.50, freq:"staple", serving:"1/2 cup", cal:240, protein:5, carb:35, fat:9 },
+  { id:"banana", name:"Bananas (bunch)", cat:"Produce", price:1.80, freq:"weekly", serving:"1 medium", cal:105, protein:1, carb:27, fat:0 },
+  { id:"apple", name:"Apples (bag)", cat:"Produce", price:5.00, freq:"weekly", serving:"1 medium", cal:95, protein:0, carb:25, fat:0 },
+  { id:"berries", name:"Berries (fresh or frozen bag)", cat:"Produce", price:4.50, freq:"weekly", serving:"1 cup", cal:60, protein:1, carb:14, fat:0 },
+  { id:"spinach", name:"Spinach / bell peppers", cat:"Produce", price:5.00, freq:"weekly", serving:"1 cup", cal:20, protein:2, carb:4, fat:0 },
+  { id:"salad-greens", name:"Salad greens", cat:"Produce", price:4.00, freq:"weekly", serving:"2 cups", cal:15, protein:1, carb:3, fat:0 },
+  { id:"mixed-veg", name:"Mixed frozen vegetables", cat:"Produce", price:3.50, freq:"weekly", serving:"1 cup", cal:60, protein:3, carb:12, fat:0 },
+  { id:"lettuce", name:"Shredded lettuce", cat:"Produce", price:2.75, freq:"weekly", serving:"1 cup", cal:8, protein:1, carb:1, fat:0 },
+  { id:"milk", name:"Milk (half gallon)", cat:"Dairy", price:3.00, freq:"weekly", serving:"1 cup", cal:120, protein:8, carb:12, fat:5 },
+  { id:"olive-oil", name:"Olive oil", cat:"Pantry", price:9.00, freq:"staple", serving:"1 tbsp", cal:120, protein:0, carb:0, fat:14 },
+  { id:"salsa", name:"Salsa", cat:"Pantry", price:3.50, freq:"weekly", serving:"2 tbsp", cal:10, protein:0, carb:2, fat:0 },
+  { id:"dressing", name:"Salad dressing", cat:"Pantry", price:4.00, freq:"staple", serving:"2 tbsp", cal:140, protein:0, carb:2, fat:14 },
+  { id:"soy-sauce", name:"Soy sauce", cat:"Pantry", price:3.50, freq:"staple", serving:"1 tbsp", cal:10, protein:1, carb:1, fat:0 },
+  { id:"peanut-butter", name:"Peanut butter", cat:"Pantry", price:5.50, freq:"staple", serving:"2 tbsp", cal:190, protein:7, carb:8, fat:16 },
+  { id:"honey", name:"Honey", cat:"Pantry", price:6.00, freq:"staple", serving:"1 tbsp", cal:60, protein:0, carb:17, fat:0 },
+  { id:"cinnamon", name:"Cinnamon", cat:"Pantry", price:3.00, freq:"staple", serving:"1 tsp", cal:6, protein:0, carb:2, fat:0 },
+];
+
+const STORAGE_KEY = "winger-transform-v2";
+const DEFAULT_NOTIF_SETTINGS = {
+  browserEnabled: false,
+  categories: { meals: true, training: true, water: true, video: true },
+  mealTimes: { breakfast: "08:00", lunch: "12:30", dinner: "18:30", snack: "21:00" },
+  videoTime: "19:00", waterWake: "07:00", waterSleep: "22:00", waterCheckpointOz: 16, trainLeadMinutes: 10,
+};
+const DEFAULT_DATA = {
+  completed:{}, meals:{}, water:{}, weightLogs:[], xp:0, badges:[], lastActive:null, streak:0,
+  videoWatched:{}, firedAlerts:{}, alertLog:{}, notifSettings: DEFAULT_NOTIF_SETTINGS, groceryChecked:{},
+};
+
+function App() {
+  const [data, setData] = useState(DEFAULT_DATA);
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("today");
+  const [toast, setToast] = useState(null);
+  const [expandedSession, setExpandedSession] = useState(null);
+  const [mealFilter, setMealFilter] = useState("all");
+  const [weightInput, setWeightInput] = useState("");
+  const [clock, setClock] = useState(new Date());
+
+  const today = useMemo(() => new Date(), []);
+  const todayKey = fmt(today);
+  const weekNum = weekNumberFor(today);
+  const inBridge = today > END_WEEK9 && today <= HALLOWEEN;
+  const afterHalloween = today > HALLOWEEN;
+  const beforeStart = today < PROGRAM_START;
+  const sessions = sessionsFor(today).map(([time, cat], i) => ({ id: `${todayKey}_${cat}_${i}`, time, cat }));
+  const classes = classesFor(today);
+  const macroTarget = macroTargetFor(today);
+  const ytWeek = YT.find(w => w.wk === Math.min(Math.max(weekNum,1),9)) || YT[0];
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get(STORAGE_KEY);
+        if (res && res.value) {
+          const parsed = JSON.parse(res.value);
+          setData({ ...DEFAULT_DATA, ...parsed,
+            notifSettings: { ...DEFAULT_NOTIF_SETTINGS, ...(parsed.notifSettings||{}) },
+            videoWatched: parsed.videoWatched||{}, firedAlerts: parsed.firedAlerts||{}, alertLog: parsed.alertLog||{},
+            groceryChecked: parsed.groceryChecked||{} });
+        }
+      } catch(e) {}
+      setLoaded(true);
+    })();
+  }, []);
+
+  useEffect(() => { if (loaded) storage.set(STORAGE_KEY, JSON.stringify(data)); }, [data, loaded]);
+  useEffect(() => { const id = setInterval(()=>setClock(new Date()), 1000); return ()=>clearInterval(id); }, []);
+
+  function showToast(msg) { setToast(msg); setTimeout(()=>setToast(null), 2200); }
+  function bumpStreak(nextData) {
+    const y = fmt(addDays(today, -1));
+    if (nextData.lastActive === todayKey) return nextData.streak;
+    if (nextData.lastActive === y) return nextData.streak + 1;
+    return 1;
+  }
+  function checkBadges(nextData, totalSessionsDone) {
+    const earned = new Set(nextData.badges);
+    if (totalSessionsDone >= 1) earned.add("First Session");
+    if (nextData.streak >= 7) earned.add("Week 1 Warrior");
+    if (nextData.streak >= 30) earned.add("Iron Consistency");
+    if (weekNum >= 5) earned.add("Halfway There");
+    if (totalSessionsDone >= 100) earned.add("Century Club");
+    return Array.from(earned);
+  }
+  function totalSessionsCompleted(d) { return Object.values(d.completed).reduce((s,arr)=>s+arr.length,0); }
+
+  function toggleSession(sid) {
+    setData(prev => {
+      const list = prev.completed[todayKey] || [];
+      const has = list.includes(sid);
+      const newList = has ? list.filter(x=>x!==sid) : [...list, sid];
+      let next = { ...prev, completed: { ...prev.completed, [todayKey]: newList } };
+      if (!has) { next.xp = prev.xp + 15; next.streak = bumpStreak(next); next.lastActive = todayKey; showToast("+15 XP — session logged"); }
+      else { next.xp = Math.max(0, prev.xp - 15); }
+      next.badges = checkBadges(next, totalSessionsCompleted(next));
+      return next;
+    });
+  }
+  function toggleMeal(recipeId) {
+    setData(prev => {
+      const list = prev.meals[todayKey] || [];
+      const has = list.includes(recipeId);
+      const newList = has ? list.filter(x=>x!==recipeId) : [...list, recipeId];
+      let next = { ...prev, meals: { ...prev.meals, [todayKey]: newList } };
+      next.xp = Math.max(0, prev.xp + (has ? -5 : 5));
+      if (!has) showToast("+5 XP — meal logged");
+      return next;
+    });
+  }
+  function adjustWater(delta) {
+    setData(prev => { const cur = prev.water[todayKey] || 0; return { ...prev, water: { ...prev.water, [todayKey]: Math.max(0, cur+delta) } }; });
+  }
+  function logWeight() {
+    const w = parseFloat(weightInput); if (!w || w <= 0) return;
+    setData(prev => { const others = prev.weightLogs.filter(l=>l.date!==todayKey); return { ...prev, weightLogs: [...others, {date:todayKey, weight:w}].sort((a,b)=>a.date.localeCompare(b.date)) }; });
+    setWeightInput(""); showToast("Weight logged");
+  }
+  function updateNotifSettings(patch) { setData(prev => ({ ...prev, notifSettings: { ...prev.notifSettings, ...patch } })); }
+  function toggleCategory(cat) { setData(prev => ({ ...prev, notifSettings: { ...prev.notifSettings, categories: { ...prev.notifSettings.categories, [cat]: !prev.notifSettings.categories[cat] } } })); }
+  function markVideoWatched() { setData(prev => ({ ...prev, videoWatched: { ...prev.videoWatched, [todayKey]: true } })); showToast("Video marked watched"); }
+  function toggleGrocery(id) { setData(prev => ({ ...prev, groceryChecked: { ...prev.groceryChecked, [id]: !prev.groceryChecked[id] } })); }
+  function resetGroceries() { setData(prev => ({ ...prev, groceryChecked: {} })); showToast("Grocery list reset"); }
+  async function requestBrowserNotifications() {
+    try {
+      if (typeof Notification === "undefined") { showToast("Push notifications aren't supported on this device"); return; }
+      const perm = await Notification.requestPermission();
+      if (perm === "granted") { updateNotifSettings({ browserEnabled:true }); showToast("Browser notifications enabled"); }
+      else { updateNotifSettings({ browserEnabled:false }); showToast("Notifications blocked — using in-app alerts"); }
+    } catch(e) { updateNotifSettings({ browserEnabled:false }); showToast("Push notifications unavailable — using in-app alerts"); }
+  }
+
+  useEffect(() => {
+    const tick = () => {
+      setData(prev => {
+        const ns = prev.notifSettings || DEFAULT_NOTIF_SETTINGS;
+        const now = new Date();
+        const fired = prev.firedAlerts[todayKey] || [];
+        const newAlerts = [];
+        const addAlert = (key, type, message) => { if (fired.includes(key) || newAlerts.some(a=>a.key===key)) return; newAlerts.push({ key, type, message, time: fmtTime(now) }); };
+
+        if (ns.categories.training) {
+          sessions.forEach(s => {
+            if (s.time === "flex") return;
+            const t = parseClockAmPm(s.time, today); if (!t) return;
+            const lead = new Date(t.getTime() - ns.trainLeadMinutes*60000);
+            const done = (prev.completed[todayKey]||[]).includes(s.id);
+            if (!done && now>=lead && now<new Date(t.getTime()+15*60000)) addAlert(`train-${s.id}`, "train", `${CATEGORIES[s.cat].title} at ${s.time}`);
+          });
+        }
+        if (ns.categories.meals) {
+          Object.entries(ns.mealTimes).forEach(([mealKey, hhmm]) => {
+            const t = timeOnDate(today, hhmm);
+            const loggedThisMeal = (prev.meals[todayKey]||[]).some(id => { const r = RECIPES.find(x=>x.id===id); return r && r.meal===mealKey; });
+            if (!loggedThisMeal && now>=t && now<new Date(t.getTime()+30*60000)) addAlert(`meal-${mealKey}`, "meal", `Time to eat — ${mealKey}`);
+          });
+        }
+        if (ns.categories.video) {
+          const wd = mondayIndex(today);
+          let videoTitle = null;
+          if (wd===6 && ytWeek.sun) videoTitle = ytWeek.sun[0];
+          else if (wd===1 && ytWeek.tue && ytWeek.tue[1]) videoTitle = ytWeek.tue[0];
+          const watched = (prev.videoWatched||{})[todayKey];
+          const t = timeOnDate(today, ns.videoTime);
+          if (videoTitle && !watched && now>=t && now<new Date(t.getTime()+30*60000)) addAlert("video","video", `Watch: ${videoTitle}`);
+        }
+        if (ns.categories.water) {
+          const { points } = waterCheckpoints(today, ns);
+          const waterNow = prev.water[todayKey] || 0;
+          points.forEach((p,i) => { if (now>=p.time && now<new Date(p.time.getTime()+15*60000) && waterNow<p.target) addAlert(`water-${i}`, "water", `Drink up — target is ${p.target}oz by now`); });
+        }
+        if (newAlerts.length===0) return prev;
+        newAlerts.forEach(a => { if (ns.browserEnabled && typeof Notification!=="undefined" && Notification.permission==="granted") { try { new Notification("Winger", { body:a.message }); } catch(e){} } });
+        showToast(newAlerts[0].message);
+        return { ...prev, firedAlerts: { ...prev.firedAlerts, [todayKey]: [...fired, ...newAlerts.map(a=>a.key)] }, alertLog: { ...prev.alertLog, [todayKey]: [...(prev.alertLog[todayKey]||[]), ...newAlerts] } };
+      });
+    };
+    const id = setInterval(tick, 20000); tick();
+    return () => clearInterval(id);
+    // eslint-disable-next-line
+  }, [todayKey]);
+
+  const completedToday = data.completed[todayKey] || [];
+  const mealsToday = data.meals[todayKey] || [];
+  const waterToday = data.water[todayKey] || 0;
+  const macroSum = mealsToday.reduce((acc,id) => { const r=RECIPES.find(x=>x.id===id); if(!r) return acc; return { cal:acc.cal+r.cal, protein:acc.protein+r.protein, carb:acc.carb+r.carb, fat:acc.fat+r.fat }; }, {cal:0,protein:0,carb:0,fat:0});
+  const { cur: curLevel, next: nextLevel } = levelFor(data.xp);
+  const alertCountToday = (data.alertLog[todayKey]||[]).length;
+
+  const bottomTabs = [
+    { id:"today", label:"Today", icon: CalendarDays }, { id:"train", label:"Train", icon: Dumbbell },
+    { id:"fuel", label:"Fuel", icon: Utensils }, { id:"progress", label:"Progress", icon: TrendingUp },
+    { id:"learn", label:"Learn", icon: Video }, { id:"alerts", label:"Alerts", icon: Bell },
+  ];
+
+  return (
+    <div className="min-h-screen w-full flex justify-center" style={{ background:"#101820" }}>
+      <div className="w-full max-w-md relative" style={{ fontFamily:"system-ui,-apple-system,sans-serif" }}>
+        <div className="sticky top-0 z-20 px-4 pt-4 pb-3" style={{ background:"#101820", borderBottom:"1px solid #223" }}>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.2em]" style={{ color:"#7C8B99" }}>Offseason Build</div>
+              <div className="text-lg font-black uppercase tracking-tight" style={{ color:"#F5F5F0" }}>{curLevel.title}</div>
+            </div>
+            <div className="flex gap-3">
+              <Stat icon={<Zap size={14} color="#F2B705"/>} value={data.xp} label="XP"/>
+              <Stat icon={<Flame size={14} color="#E8593D"/>} value={data.streak} label="Streak"/>
+            </div>
+          </div>
+          {nextLevel && (
+            <div className="mt-2">
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background:"#1C2733" }}>
+                <div className="h-full rounded-full" style={{ width:`${Math.min(100,((data.xp-curLevel.min)/(nextLevel.min-curLevel.min))*100)}%`, background:"linear-gradient(90deg,#F2B705,#E8593D)" }}/>
+              </div>
+              <div className="text-[10px] mt-1" style={{ color:"#7C8B99" }}>{nextLevel.min-data.xp} XP to {nextLevel.title}</div>
+            </div>
+          )}
+        </div>
+
+        <div className="px-4 pb-24 pt-4">
+          <HalloweenBanner clock={clock}/>
+          {beforeStart && <InfoBanner text={`Program starts ${PROGRAM_START.toDateString()}. Everything below previews Day 1.`}/>}
+          {afterHalloween && <InfoBanner text="You're past the Halloween checkpoint — Phase 2 (Strength/Power Build, Nov–Jan) begins now."/>}
+
+          {tab==="today" && <TodayTab today={today} weekNum={weekNum} inBridge={inBridge} sessions={sessions} classes={classes}
+            completedToday={completedToday} toggleSession={toggleSession} macroTarget={macroTarget} macroSum={macroSum}
+            waterToday={waterToday} adjustWater={adjustWater} expandedSession={expandedSession} setExpandedSession={setExpandedSession}
+            notifSettings={data.notifSettings} clock={clock} setTab={setTab}/>}
+          {tab==="train" && <TrainTab sessions={sessions} completedToday={completedToday} toggleSession={toggleSession}/>}
+          {tab==="fuel" && <FuelTab macroTarget={macroTarget} macroSum={macroSum} mealsToday={mealsToday} toggleMeal={toggleMeal} mealFilter={mealFilter} setMealFilter={setMealFilter} groceryChecked={data.groceryChecked} toggleGrocery={toggleGrocery} resetGroceries={resetGroceries}/>}
+          {tab==="progress" && <ProgressTab data={data} weightInput={weightInput} setWeightInput={setWeightInput} logWeight={logWeight} weekNum={weekNum}/>}
+          {tab==="learn" && <LearnTab ytWeek={ytWeek} weekNum={weekNum} today={today} videoWatched={data.videoWatched[todayKey]} markVideoWatched={markVideoWatched}/>}
+          {tab==="alerts" && <AlertsTab data={data} today={today} todayKey={todayKey} clock={clock} waterToday={waterToday} adjustWater={adjustWater}
+            updateNotifSettings={updateNotifSettings} toggleCategory={toggleCategory} requestBrowserNotifications={requestBrowserNotifications}/>}
+        </div>
+
+        <div className="fixed bottom-0 left-0 right-0 z-20 flex justify-center" style={{ paddingBottom:"env(safe-area-inset-bottom)" }}>
+          <div className="w-full max-w-md flex" style={{ background:"#141E28", borderTop:"1px solid #223" }}>
+            {bottomTabs.map(t => { const I=t.icon; const active=tab===t.id; return (
+              <button key={t.id} onClick={()=>setTab(t.id)} className="flex-1 flex flex-col items-center gap-1 py-2.5 relative" style={{ color: active?"#F2B705":"#7C8B99" }}>
+                <I size={18}/>
+                {t.id==="alerts" && alertCountToday>0 && <span className="absolute top-1.5 right-[28%] w-1.5 h-1.5 rounded-full" style={{ background:"#E8593D" }}/>}
+                <span className="text-[10px] font-semibold uppercase tracking-wide">{t.label}</span>
+              </button>
+            );})}
+          </div>
+        </div>
+
+        {toast && <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full text-sm font-semibold text-center" style={{ background:"#F2B705", color:"#101820", maxWidth:"88%" }}>{toast}</div>}
+      </div>
+    </div>
+  );
+}
+
+function HalloweenBanner({ clock }) {
+  const msLeft = HALLOWEEN - clock;
+  const totalDays = Math.max(0, Math.floor(msLeft / 86400000));
+  const hrs = Math.max(0, Math.floor((msLeft % 86400000) / 3600000));
+  const past = msLeft <= 0;
+  return (
+    <div className="mb-4 rounded-xl px-3 py-2.5 flex items-center justify-between" style={{ background: "linear-gradient(90deg,#3D1F0A,#1C2733)", border: "1px solid #E8593D" }}>
+      <div>
+        <div className="text-[10px] uppercase tracking-widest font-bold" style={{ color: "#F2B705" }}>{past ? "Halloween" : "Countdown to Halloween"}</div>
+        <div className="text-xl font-black" style={{ color: "#F5F5F0" }}>
+          {past ? "It's here \u{1F383}" : `${totalDays}d ${hrs}h left`}
+        </div>
+      </div>
+      <div className="text-2xl">{"\u{1F383}"}</div>
+    </div>
+  );
+}
+
+function Stat({ icon, value, label }) {
+  return <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg" style={{ background:"#1C2733" }}>{icon}<span className="font-mono font-bold text-sm" style={{ color:"#F5F5F0" }}>{value}</span><span className="text-[9px] uppercase" style={{ color:"#7C8B99" }}>{label}</span></div>;
+}
+function InfoBanner({ text }) { return <div className="mb-4 px-3 py-2.5 rounded-lg text-xs" style={{ background:"#1C2733", color:"#C9D3DC", border:"1px solid #2A3946" }}>{text}</div>; }
+function SectionLabel({ children }) { return <div className="text-[11px] font-bold uppercase tracking-[0.15em] mb-2" style={{ color:"#7C8B99" }}>{children}</div>; }
+
+function CategoryCard({ cat, sid, done, onToggle, expanded, onExpand, time }) {
+  const info = CATEGORIES[cat];
+  return (
+    <div className="rounded-xl mb-2.5 overflow-hidden" style={{ background:"#1C2733", border:`1px solid ${done?"#2E7D5B":"#2A3946"}` }}>
+      <button className="w-full flex items-center gap-3 p-3 text-left" onClick={onExpand}>
+        <button onClick={(e)=>{e.stopPropagation(); onToggle(sid);}} className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: done?"#2E7D5B":"transparent", border:`2px solid ${done?"#2E7D5B":"#495866"}` }}>
+          {done ? <Check size={15} color="#fff"/> : null}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full shrink-0" style={{ background:info.color }}/><span className="font-bold text-sm truncate" style={{ color:"#F5F5F0" }}>{info.title}</span></div>
+          <div className="text-[11px] mt-0.5" style={{ color:"#7C8B99" }}>{time} · {info.time}</div>
+        </div>
+        {expanded ? <ChevronDown size={16} color="#7C8B99"/> : <ChevronRight size={16} color="#7C8B99"/>}
+      </button>
+      {expanded && <div className="px-3 pb-3 pt-0"><ul className="space-y-1.5">{info.exercises.map((ex,i)=><li key={i} className="text-xs flex gap-2" style={{ color:"#C9D3DC" }}><span style={{ color:info.color }}>•</span><span>{ex}</span></li>)}</ul></div>}
+    </div>
+  );
+}
+
+function TodayTab({ today, weekNum, inBridge, sessions, classes, completedToday, toggleSession, macroTarget, macroSum, waterToday, adjustWater, expandedSession, setExpandedSession, notifSettings, clock, setTab }) {
+  const dateLabel = today.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"});
+  const allDone = sessions.length>0 && sessions.every(s=>completedToday.includes(s.id));
+  const { goal, wake, sleep } = waterCheckpoints(today, notifSettings);
+  const paceTarget = waterPaceTarget(clock, wake, sleep, goal);
+  const paceDiff = waterToday - paceTarget;
+  return (
+    <div>
+      <div className="mb-4"><div className="text-2xl font-black" style={{ color:"#F5F5F0" }}>{dateLabel}</div><div className="text-xs mt-1" style={{ color:"#7C8B99" }}>Week {Math.max(weekNum,1)} {inBridge?"— Halloween Bridge":"— Offseason Build"}</div></div>
+      {allDone && <div className="mb-4 px-3 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2" style={{ background:"#1C3327", color:"#4ADE80" }}><Trophy size={16}/> All sessions complete today. Nice work.</div>}
+      <SectionLabel>Today's Sessions</SectionLabel>
+      {sessions.map(s=><CategoryCard key={s.id} cat={s.cat} sid={s.id} time={s.time} done={completedToday.includes(s.id)} onToggle={toggleSession} expanded={expandedSession===s.id} onExpand={()=>setExpandedSession(expandedSession===s.id?null:s.id)}/>)}
+      {classes.length>0 && <div className="mt-1 mb-4 text-xs" style={{ color:"#7C8B99" }}>Classes today: {classes.join(" • ")}</div>}
+      <SectionLabel>Macros</SectionLabel>
+      <MacroBars target={macroTarget} sum={macroSum}/>
+      <SectionLabel>Water</SectionLabel>
+      <div className="rounded-xl p-3 mb-2" style={{ background:"#1C2733" }}>
+        <div className="flex items-center gap-3">
+          <Droplet size={18} color="#5B9FE8"/>
+          <div className="flex-1"><div className="font-bold text-sm" style={{ color:"#F5F5F0" }}>{waterToday} oz</div><div className="text-[11px]" style={{ color:"#7C8B99" }}>Goal: {goal}oz by {fmtTime(sleep)}</div></div>
+          <button onClick={()=>adjustWater(-8)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background:"#2A3946" }}><Minus size={14} color="#F5F5F0"/></button>
+          <button onClick={()=>adjustWater(8)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background:"#5B9FE8" }}><Plus size={14} color="#101820"/></button>
+        </div>
+        <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop:"1px solid #2A3946" }}>
+          <span className="text-[11px] font-semibold" style={{ color: paceDiff>=0?"#4ADE80":"#E8593D" }}>{paceDiff>=0?`On pace — target now ${paceTarget}oz`:`Behind pace by ${Math.abs(paceDiff)}oz — target now ${paceTarget}oz`}</span>
+          <button onClick={()=>setTab("alerts")} className="text-[11px] font-bold" style={{ color:"#F2B705" }}>Timer →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MacroBars({ target, sum }) {
+  const rows = [ {label:"Calories",val:sum.cal,max:target.cal,unit:""}, {label:"Protein",val:sum.protein,max:target.protein,unit:"g"}, {label:"Carbs",val:sum.carb,max:target.carb,unit:"g"}, {label:"Fat",val:sum.fat,max:target.fat,unit:"g"} ];
+  return (
+    <div className="rounded-xl p-3 mb-4" style={{ background:"#1C2733" }}>
+      <div className="text-[11px] mb-2" style={{ color:"#7C8B99" }}>{target.label} target</div>
+      {rows.map(r=>(
+        <div key={r.label} className="mb-2 last:mb-0">
+          <div className="flex justify-between text-xs mb-1"><span style={{ color:"#C9D3DC" }}>{r.label}</span><span className="font-mono" style={{ color:"#F5F5F0" }}>{r.val}{r.unit} / {r.max}{r.unit}</span></div>
+          <div className="h-1.5 rounded-full overflow-hidden" style={{ background:"#101820" }}><div className="h-full rounded-full" style={{ width:`${Math.min(100,(r.val/r.max)*100)}%`, background:"#F2B705" }}/></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TrainTab({ sessions, completedToday, toggleSession }) {
+  const [expanded, setExpanded] = useState(null);
+  const [showAllCats, setShowAllCats] = useState(false);
+  return (
+    <div>
+      <SectionLabel>Today's Sessions</SectionLabel>
+      {sessions.map(s=><CategoryCard key={s.id} cat={s.cat} sid={s.id} time={s.time} done={completedToday.includes(s.id)} onToggle={toggleSession} expanded={expanded===s.id} onExpand={()=>setExpanded(expanded===s.id?null:s.id)}/>)}
+      <button onClick={()=>setShowAllCats(v=>!v)} className="mt-4 mb-2 text-xs font-bold flex items-center gap-1" style={{ color:"#F2B705" }}>{showAllCats?<ChevronDown size={14}/>:<ChevronRight size={14}/>} All workout categories (reference)</button>
+      {showAllCats && <div>{Object.entries(CATEGORIES).map(([key,info])=>(
+        <div key={key} className="rounded-xl mb-2 p-3" style={{ background:"#1C2733", border:"1px solid #2A3946" }}>
+          <div className="flex items-center gap-2 mb-1.5"><span className="w-2 h-2 rounded-full" style={{ background:info.color }}/><span className="font-bold text-sm" style={{ color:"#F5F5F0" }}>{info.title}</span><span className="text-[10px] ml-auto" style={{ color:"#7C8B99" }}>{info.time}</span></div>
+          <ul className="space-y-1">{info.exercises.map((ex,i)=><li key={i} className="text-xs" style={{ color:"#C9D3DC" }}>• {ex}</li>)}</ul>
+        </div>
+      ))}</div>}
+    </div>
+  );
+}
+
+function FuelTab({ macroTarget, macroSum, mealsToday, toggleMeal, mealFilter, setMealFilter, groceryChecked, toggleGrocery, resetGroceries }) {
+  const [view, setView] = useState("recipes");
+  const filters = ["all","breakfast","lunch","dinner","snack","before bed"];
+  const shown = mealFilter==="all" ? RECIPES : RECIPES.filter(r=>r.meal===mealFilter);
+  return (
+    <div>
+      <SectionLabel>Today's Macro Progress</SectionLabel>
+      <MacroBars target={macroTarget} sum={macroSum}/>
+
+      <div className="flex gap-2 mb-4">
+        <button onClick={()=>setView("recipes")} className="flex-1 py-2 rounded-lg text-xs font-bold uppercase tracking-wide" style={{ background: view==="recipes"?"#F2B705":"#1C2733", color: view==="recipes"?"#101820":"#C9D3DC" }}>Recipes</button>
+        <button onClick={()=>setView("groceries")} className="flex-1 py-2 rounded-lg text-xs font-bold uppercase tracking-wide" style={{ background: view==="groceries"?"#F2B705":"#1C2733", color: view==="groceries"?"#101820":"#C9D3DC" }}>Groceries</button>
+        <button onClick={()=>setView("prep")} className="flex-1 py-2 rounded-lg text-xs font-bold uppercase tracking-wide" style={{ background: view==="prep"?"#F2B705":"#1C2733", color: view==="prep"?"#101820":"#C9D3DC" }}>Meal Prep</button>
+      </div>
+
+      {view==="recipes" && (
+        <div>
+          <SectionLabel>Recipes</SectionLabel>
+          <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1">{filters.map(f=>(
+            <button key={f} onClick={()=>setMealFilter(f)} className="px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap capitalize" style={{ background: mealFilter===f?"#F2B705":"#1C2733", color: mealFilter===f?"#101820":"#C9D3DC" }}>{f}</button>
+          ))}</div>
+          {shown.map(r=>{ const done = mealsToday.includes(r.id); return (
+            <div key={r.id} className="rounded-xl mb-2.5 p-3" style={{ background:"#1C2733", border:`1px solid ${done?"#2E7D5B":"#2A3946"}` }}>
+              <div className="flex items-start gap-3">
+                <button onClick={()=>toggleMeal(r.id)} className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5" style={{ background: done?"#2E7D5B":"transparent", border:`2px solid ${done?"#2E7D5B":"#495866"}` }}>{done?<Check size={15} color="#fff"/>:null}</button>
+                <div className="flex-1">
+                  <div className="flex justify-between items-start"><span className="font-bold text-sm" style={{ color:"#F5F5F0" }}>{r.name}</span><span className="text-[10px] uppercase font-semibold shrink-0 ml-2" style={{ color:"#7C8B99" }}>{r.meal}</span></div>
+                  <div className="text-[11px] font-mono mt-0.5" style={{ color:"#F2B705" }}>{r.cal} cal · {r.protein}p / {r.carb}c / {r.fat}f</div>
+                  <div className="text-xs mt-1.5" style={{ color:"#C9D3DC" }}>{r.ing.join(", ")}</div>
+                  <div className="text-[11px] mt-1" style={{ color:"#7C8B99" }}>{r.steps}</div>
+                </div>
+              </div>
+            </div>
+          );})}
+        </div>
+      )}
+
+      {view==="groceries" && <GroceryList groceryChecked={groceryChecked} toggleGrocery={toggleGrocery} resetGroceries={resetGroceries}/>}
+      {view==="prep" && <MealPrepView/>}
+    </div>
+  );
+}
+
+function GroceryList({ groceryChecked, toggleGrocery, resetGroceries }) {
+  const categories = ["Protein","Carbs","Produce","Dairy","Pantry"];
+  const checkedCount = Object.values(groceryChecked).filter(Boolean).length;
+  const totalAll = GROCERY_LIST.reduce((s,i)=>s+i.price,0);
+  const totalWeekly = GROCERY_LIST.filter(i=>i.freq==="weekly").reduce((s,i)=>s+i.price,0);
+  const totalChecked = GROCERY_LIST.filter(i=>groceryChecked[i.id]).reduce((s,i)=>s+i.price,0);
+  return (
+    <div>
+      <div className="rounded-xl p-3 mb-3" style={{ background:"#1C2733" }}>
+        <div className="flex justify-between text-xs mb-1"><span style={{ color:"#7C8B99" }}>Estimated weekly restock</span><span className="font-mono font-bold" style={{ color:"#F5F5F0" }}>${totalWeekly.toFixed(2)}</span></div>
+        <div className="flex justify-between text-xs mb-1"><span style={{ color:"#7C8B99" }}>Full list incl. one-time staples</span><span className="font-mono font-bold" style={{ color:"#F5F5F0" }}>${totalAll.toFixed(2)}</span></div>
+        <div className="flex justify-between text-xs"><span style={{ color:"#7C8B99" }}>Checked off so far</span><span className="font-mono font-bold" style={{ color:"#4ADE80" }}>${totalChecked.toFixed(2)} ({checkedCount}/{GROCERY_LIST.length})</span></div>
+        <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background:"#101820" }}><div className="h-full rounded-full" style={{ width:`${Math.min(100,(checkedCount/GROCERY_LIST.length)*100)}%`, background:"#F2B705" }}/></div>
+        <button onClick={resetGroceries} className="w-full mt-3 py-2 rounded-lg text-xs font-bold" style={{ background:"#2A3946", color:"#F5F5F0" }}>Reset checklist for new week</button>
+      </div>
+      <div className="mb-3 text-[11px]" style={{ color:"#7C8B99" }}>Estimates are rough Bay Area averages — actual prices vary by store. Each Target link opens a search for that item; sign into Target.com or set your Vallejo store there to see exact local stock and pricing. "Staple" items are one-time buys that last several weeks.</div>
+      {categories.map(cat => {
+        const items = GROCERY_LIST.filter(i=>i.cat===cat);
+        if (items.length===0) return null;
+        return (
+          <div key={cat} className="mb-3">
+            <SectionLabel>{cat}</SectionLabel>
+            <div className="rounded-xl overflow-hidden" style={{ background:"#1C2733" }}>
+              {items.map((item,i) => {
+                const checked = !!groceryChecked[item.id];
+                return (
+                  <div key={item.id} className="p-3 flex items-center gap-3" style={{ borderBottom: i<items.length-1?"1px solid #2A3946":"none" }}>
+                    <button onClick={()=>toggleGrocery(item.id)} className="shrink-0 w-6 h-6 rounded-md flex items-center justify-center" style={{ background: checked?"#2E7D5B":"transparent", border:`2px solid ${checked?"#2E7D5B":"#495866"}` }}>{checked?<Check size={13} color="#fff"/>:null}</button>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-sm" style={{ color: checked?"#7C8B99":"#F5F5F0", textDecoration: checked?"line-through":"none" }}>{item.name}</span>
+                        {item.freq==="staple" && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded" style={{ background:"#2A3946", color:"#7C8B99" }}>staple</span>}
+                      </div>
+                      <div className="text-[10px] font-mono mt-0.5" style={{ color:"#7C8B99" }}>{item.serving}: {item.cal}cal &middot; {item.protein}p/{item.carb}c/{item.fat}f</div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className="font-mono text-xs" style={{ color:"#F2B705" }}>${item.price.toFixed(2)}</span>
+                      <a href={targetSearchUrl(item.name)} target="_blank" rel="noreferrer" className="text-[10px] font-bold px-2 py-1 rounded-full" style={{ background:"#CC0000", color:"#fff" }}>Target &rarr;</a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MealPrepView() {
+  const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const mealLabel = (id) => { const r = RECIPES.find(x=>x.id===id); return r ? r.name : id; };
+  return (
+    <div>
+      <div className="mb-3 text-[11px]" style={{ color:"#7C8B99" }}>Built from the recipes already in your Fuel tab — one batch-cook session covers most of the week.</div>
+      <SectionLabel>Sunday Prep Session</SectionLabel>
+      <div className="rounded-xl p-3 mb-4" style={{ background:"#1C2733" }}>
+        {MEAL_PREP.prepSession.map((t,i) => (
+          <div key={i} className="py-2" style={{ borderBottom: i<MEAL_PREP.prepSession.length-1?"1px solid #2A3946":"none" }}>
+            <div className="text-sm font-semibold" style={{ color:"#F5F5F0" }}>{t.task}</div>
+            <div className="text-[11px] mt-0.5" style={{ color:"#7C8B99" }}>{t.detail}</div>
+          </div>
+        ))}
+      </div>
+      <SectionLabel>Weekly Meal Map</SectionLabel>
+      {days.map(d => {
+        const m = MEAL_PREP.weekMap[d];
+        return (
+          <div key={d} className="rounded-xl p-3 mb-2.5" style={{ background:"#1C2733" }}>
+            <div className="text-[11px] font-bold uppercase mb-2" style={{ color:"#F2B705" }}>{d}</div>
+            <Row label="Breakfast" value={mealLabel(m.breakfast)}/>
+            <Row label="Lunch" value={mealLabel(m.lunch)}/>
+            <Row label="Dinner" value={mealLabel(m.dinner)}/>
+            <Row label="Snack" value={mealLabel(m.snack)}/>
+          </div>
+        );
+      })}
+      <div className="mb-2 text-[11px]" style={{ color:"#7C8B99" }}>Storage: cooked proteins and grains keep 3–4 days in the fridge — freeze Thu/Fri portions on Sunday and thaw overnight if you'd rather not re-cook midweek.</div>
+    </div>
+  );
+}
+
+function ProgressTab({ data, weightInput, setWeightInput, logWeight, weekNum }) {
+  const recent = data.weightLogs.slice(-10).reverse();
+  const badgeList = [ {id:"First Session",label:"First Session",icon:"⚽"}, {id:"Week 1 Warrior",label:"7-Day Streak",icon:"🔥"}, {id:"Iron Consistency",label:"30-Day Streak",icon:"🛡️"}, {id:"Halfway There",label:"Reached Week 5",icon:"🏁"}, {id:"Century Club",label:"100 Sessions Logged",icon:"👑"} ];
+  return (
+    <div>
+      <SectionLabel>Log Weight</SectionLabel>
+      <div className="flex gap-2 mb-4">
+        <input value={weightInput} onChange={e=>setWeightInput(e.target.value)} type="number" placeholder="e.g. 138.5" className="flex-1 rounded-lg px-3 py-2 text-sm font-mono" style={{ background:"#1C2733", color:"#F5F5F0", border:"1px solid #2A3946" }}/>
+        <button onClick={logWeight} className="px-4 rounded-lg font-bold text-sm" style={{ background:"#F2B705", color:"#101820" }}>Log</button>
+      </div>
+      {recent.length>0 && <div className="rounded-xl p-3 mb-4" style={{ background:"#1C2733" }}>
+        <div className="text-[11px] mb-2" style={{ color:"#7C8B99" }}>Recent weigh-ins</div>
+        {recent.map((l,i)=>(<div key={i} className="flex justify-between text-sm py-1" style={{ borderBottom: i<recent.length-1?"1px solid #2A3946":"none" }}><span style={{ color:"#C9D3DC" }}>{l.date}</span><span className="font-mono font-bold" style={{ color:"#F5F5F0" }}>{l.weight}</span></div>))}
+      </div>}
+      <SectionLabel>Badges</SectionLabel>
+      <div className="grid grid-cols-2 gap-2 mb-4">{badgeList.map(b=>{ const earned=data.badges.includes(b.id); return (
+        <div key={b.id} className="rounded-xl p-3 flex items-center gap-2" style={{ background: earned?"#1C3327":"#1C2733", opacity: earned?1:0.45 }}><span className="text-xl">{b.icon}</span><span className="text-xs font-semibold" style={{ color:"#F5F5F0" }}>{b.label}</span></div>
+      );})}</div>
+      <SectionLabel>Totals</SectionLabel>
+      <div className="rounded-xl p-3" style={{ background:"#1C2733" }}>
+        <Row label="Total sessions logged" value={Object.values(data.completed).reduce((s,a)=>s+a.length,0)}/>
+        <Row label="Current streak" value={`${data.streak} days`}/>
+        <Row label="Total XP" value={data.xp}/>
+        <Row label="Program week" value={Math.max(weekNum,1)}/>
+      </div>
+    </div>
+  );
+}
+function Row({ label, value }) { return <div className="flex justify-between text-sm py-1.5" style={{ borderBottom:"1px solid #2A3946" }}><span style={{ color:"#7C8B99" }}>{label}</span><span className="font-mono font-bold" style={{ color:"#F5F5F0" }}>{value}</span></div>; }
+
+function LearnTab({ ytWeek, weekNum, today, videoWatched, markVideoWatched }) {
+  const wd = mondayIndex(today);
+  const hasTodayVideo = (wd===6 && ytWeek.sun) || (wd===1 && ytWeek.tue && ytWeek.tue[1]);
+  return (
+    <div>
+      <SectionLabel>This Week's Videos</SectionLabel>
+      <VideoCard title={ytWeek.sun[0]} url={ytWeek.sun[1]} tag="Sunday deep-dive"/>
+      {ytWeek.tue && ytWeek.tue[1] && <VideoCard title={ytWeek.tue[0]} url={ytWeek.tue[1]} tag="Tuesday primer"/>}
+      {hasTodayVideo && <button onClick={markVideoWatched} disabled={videoWatched} className="w-full mb-4 py-2.5 rounded-lg text-sm font-bold" style={{ background: videoWatched?"#1C3327":"#F2B705", color: videoWatched?"#4ADE80":"#101820" }}>{videoWatched?"Watched today ✓":"Mark today's video watched"}</button>}
+      <SectionLabel>All Weeks</SectionLabel>
+      {YT.map(w=>(
+        <div key={w.wk} className="rounded-xl p-3 mb-2" style={{ background: w.wk===Math.max(weekNum,1)?"#1C3327":"#1C2733" }}>
+          <div className="text-[11px] font-bold mb-1" style={{ color:"#7C8B99" }}>WEEK {w.wk}</div>
+          <a href={w.sun[1]} target="_blank" rel="noreferrer" className="text-xs block mb-0.5" style={{ color:"#F2B705" }}>{w.sun[0]}</a>
+          {w.tue && w.tue[1] && <a href={w.tue[1]} target="_blank" rel="noreferrer" className="text-xs block" style={{ color:"#5B9FE8" }}>{w.tue[0]}</a>}
+        </div>
+      ))}
+    </div>
+  );
+}
+function VideoCard({ title, url, tag }) {
+  return <a href={url} target="_blank" rel="noreferrer" className="block rounded-xl p-3 mb-2.5" style={{ background:"#1C2733", border:"1px solid #2A3946" }}><div className="flex items-center gap-2 mb-1"><Video size={14} color="#F2B705"/><span className="text-[10px] uppercase font-bold" style={{ color:"#7C8B99" }}>{tag}</span></div><div className="text-sm font-semibold" style={{ color:"#F5F5F0" }}>{title}</div></a>;
+}
+function TimeRow({ label, value, onChange }) {
+  return <div className="flex items-center justify-between py-2" style={{ borderBottom:"1px solid #2A3946" }}><span className="text-xs" style={{ color:"#C9D3DC" }}>{label}</span><input type="time" value={value} onChange={e=>onChange(e.target.value)} className="rounded-lg px-2 py-1 text-xs font-mono" style={{ background:"#101820", color:"#F5F5F0", border:"1px solid #2A3946" }}/></div>;
+}
+
+function AlertsTab({ data, today, todayKey, clock, waterToday, adjustWater, updateNotifSettings, toggleCategory, requestBrowserNotifications }) {
+  const ns = data.notifSettings;
+  const { points, goal, wake, sleep } = waterCheckpoints(today, ns);
+  const paceTarget = waterPaceTarget(clock, wake, sleep, goal);
+  const diff = waterToday - paceTarget;
+  const nextPoint = points.find(p=>p.time>clock);
+  const alertLog = data.alertLog[todayKey] || [];
+  const catList = [["training","Train"],["meals","Eat"],["water","Water"],["video","Video"]];
+  return (
+    <div>
+      <SectionLabel>Notifications</SectionLabel>
+      <div className="rounded-xl p-3 mb-3" style={{ background:"#1C2733" }}>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-sm font-semibold flex items-center gap-2" style={{ color:"#F5F5F0" }}><Bell size={14} color="#F2B705"/> Browser push</div>
+          <button onClick={requestBrowserNotifications} className="px-3 py-1.5 rounded-full text-[11px] font-bold" style={{ background: ns.browserEnabled?"#2E7D5B":"#F2B705", color: ns.browserEnabled?"#fff":"#101820" }}>{ns.browserEnabled?"Enabled":"Enable"}</button>
+        </div>
+        <div className="text-[11px]" style={{ color:"#7C8B99" }}>iOS Safari's support for push here is limited even when added to your home screen. Every alert always shows as an in-app banner and in the log below either way.</div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mb-4">{catList.map(([key,label])=>(
+        <button key={key} onClick={()=>toggleCategory(key)} className="rounded-xl p-3 flex items-center justify-between" style={{ background: ns.categories[key]?"#1C3327":"#1C2733" }}>
+          <span className="text-xs font-semibold" style={{ color:"#F5F5F0" }}>{label}</span>
+          <span className="w-8 h-5 rounded-full relative shrink-0" style={{ background: ns.categories[key]?"#2E7D5B":"#2A3946" }}><span className="absolute top-0.5 w-4 h-4 rounded-full" style={{ background:"#fff", left: ns.categories[key]?"16px":"2px", transition:"left .15s" }}/></span>
+        </button>
+      ))}</div>
+      <SectionLabel>Water Pacing Timer</SectionLabel>
+      <div className="rounded-xl p-3 mb-3" style={{ background:"#1C2733" }}>
+        <div className="flex justify-between items-end mb-1">
+          <div><div className="text-[11px]" style={{ color:"#7C8B99" }}>You should have had</div><div className="text-2xl font-black" style={{ color:"#5B9FE8" }}>{paceTarget} oz</div></div>
+          <div className="text-right"><div className="text-[11px]" style={{ color:"#7C8B99" }}>You've had</div><div className="text-lg font-bold" style={{ color:"#F5F5F0" }}>{waterToday} oz</div></div>
+        </div>
+        <div className="text-xs font-semibold" style={{ color: diff>=0?"#4ADE80":"#E8593D" }}>{diff>=0?`On pace, +${diff}oz ahead`:`Behind pace by ${Math.abs(diff)}oz`}</div>
+        <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background:"#101820" }}><div className="h-full rounded-full" style={{ width:`${Math.min(100,(waterToday/goal)*100)}%`, background:"#5B9FE8" }}/></div>
+        <div className="text-[11px] mt-1" style={{ color:"#7C8B99" }}>Goal today: {goal}oz, window {fmtTime(wake)}–{fmtTime(sleep)}</div>
+        {nextPoint ? (
+          <div className="mt-3 rounded-lg p-2.5 flex items-center justify-between" style={{ background:"#101820" }}>
+            <div><div className="text-[10px] uppercase font-bold" style={{ color:"#7C8B99" }}>Next checkpoint</div><div className="text-sm font-bold" style={{ color:"#F5F5F0" }}>{nextPoint.target}oz by {fmtTime(nextPoint.time)}</div></div>
+            <div className="font-mono text-lg font-black" style={{ color:"#F2B705" }}>{fmtCountdown(nextPoint.time-clock)}</div>
+          </div>
+        ) : <div className="mt-3 rounded-lg p-2.5 text-xs font-semibold text-center" style={{ background:"#1C3327", color:"#4ADE80" }}>All checkpoints for today have passed.</div>}
+        <div className="flex gap-2 mt-3"><button onClick={()=>adjustWater(-8)} className="flex-1 py-2 rounded-lg font-bold text-sm" style={{ background:"#2A3946", color:"#F5F5F0" }}>-8oz</button><button onClick={()=>adjustWater(8)} className="flex-1 py-2 rounded-lg font-bold text-sm" style={{ background:"#5B9FE8", color:"#101820" }}>+8oz</button></div>
+      </div>
+      <div className="rounded-xl p-3 mb-4" style={{ background:"#1C2733" }}>
+        <div className="text-[11px] font-bold uppercase mb-2" style={{ color:"#7C8B99" }}>Checkpoint schedule</div>
+        {points.map((p,i)=>{ const passed=clock>=p.time; const met=waterToday>=p.target; return (
+          <div key={i} className="flex items-center justify-between text-xs py-1.5" style={{ borderBottom: i<points.length-1?"1px solid #2A3946":"none" }}>
+            <span style={{ color: passed?(met?"#4ADE80":"#E8593D"):"#C9D3DC" }}>{fmtTime(p.time)}</span>
+            <span className="font-mono" style={{ color:"#7C8B99" }}>{p.target}oz</span>
+            {passed ? (met ? <Check size={12} color="#4ADE80"/> : <X size={12} color="#E8593D"/>) : <Circle size={10} color="#495866"/>}
+          </div>
+        );})}
+      </div>
+      <SectionLabel>Reminder Times</SectionLabel>
+      <div className="rounded-xl p-3 mb-3" style={{ background:"#1C2733" }}>
+        <TimeRow label="Breakfast" value={ns.mealTimes.breakfast} onChange={v=>updateNotifSettings({mealTimes:{...ns.mealTimes,breakfast:v}})}/>
+        <TimeRow label="Lunch" value={ns.mealTimes.lunch} onChange={v=>updateNotifSettings({mealTimes:{...ns.mealTimes,lunch:v}})}/>
+        <TimeRow label="Dinner" value={ns.mealTimes.dinner} onChange={v=>updateNotifSettings({mealTimes:{...ns.mealTimes,dinner:v}})}/>
+        <TimeRow label="Evening snack" value={ns.mealTimes.snack} onChange={v=>updateNotifSettings({mealTimes:{...ns.mealTimes,snack:v}})}/>
+        <TimeRow label="Video reminder" value={ns.videoTime} onChange={v=>updateNotifSettings({videoTime:v})}/>
+        <TimeRow label="Water window — wake" value={ns.waterWake} onChange={v=>updateNotifSettings({waterWake:v})}/>
+        <TimeRow label="Water window — sleep" value={ns.waterSleep} onChange={v=>updateNotifSettings({waterSleep:v})}/>
+        <div className="flex items-center justify-between py-2" style={{ borderBottom:"1px solid #2A3946" }}><span className="text-xs" style={{ color:"#C9D3DC" }}>Water checkpoint size</span><select value={ns.waterCheckpointOz} onChange={e=>updateNotifSettings({waterCheckpointOz:Number(e.target.value)})} className="rounded-lg px-2 py-1 text-xs font-mono" style={{ background:"#101820", color:"#F5F5F0", border:"1px solid #2A3946" }}>{[8,12,16,20].map(v=><option key={v} value={v}>{v}oz</option>)}</select></div>
+        <div className="flex items-center justify-between py-2"><span className="text-xs" style={{ color:"#C9D3DC" }}>Train reminder lead time</span><select value={ns.trainLeadMinutes} onChange={e=>updateNotifSettings({trainLeadMinutes:Number(e.target.value)})} className="rounded-lg px-2 py-1 text-xs font-mono" style={{ background:"#101820", color:"#F5F5F0", border:"1px solid #2A3946" }}>{[0,5,10,15,30].map(v=><option key={v} value={v}>{v} min</option>)}</select></div>
+      </div>
+      <SectionLabel>Today's Alerts</SectionLabel>
+      <div className="rounded-xl p-3" style={{ background:"#1C2733" }}>
+        {alertLog.length===0 && <div className="text-xs" style={{ color:"#7C8B99" }}>No alerts fired yet today.</div>}
+        {alertLog.slice().reverse().map((a,i)=>(<div key={i} className="text-xs py-1.5 flex items-center gap-2" style={{ borderBottom: i<alertLog.length-1?"1px solid #2A3946":"none" }}><span className="font-mono" style={{ color:"#7C8B99" }}>{a.time}</span><span style={{ color:"#F5F5F0" }}>{a.message}</span></div>))}
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
