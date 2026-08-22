@@ -12,6 +12,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.20/babel.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   html,body{background:#101820;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 </style>
@@ -320,6 +321,10 @@ const GROCERY_LIST = [
   { id:"cinnamon", name:"Cinnamon", cat:"Pantry", price:3.00, freq:"staple", serving:"1 tsp", cal:6, protein:0, carb:2, fat:0 },
 ];
 
+const GOOGLE_CLIENT_ID = "686234399588-9snl2179evv0kh7o9fcufj7jfrfaodf6.apps.googleusercontent.com";
+const GOOGLE_HEALTH_SCOPES = "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly https://www.googleapis.com/auth/googlehealth.sleep.readonly https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
+const GOOGLE_HEALTH_BASE = "https://health.googleapis.com/v4";
+
 const STORAGE_KEY = "winger-transform-v2";
 const DEFAULT_NOTIF_SETTINGS = {
   browserEnabled: false,
@@ -329,7 +334,7 @@ const DEFAULT_NOTIF_SETTINGS = {
 };
 const DEFAULT_DATA = {
   completed:{}, meals:{}, water:{}, weightLogs:[], xp:0, badges:[], lastActive:null, streak:0,
-  videoWatched:{}, firedAlerts:{}, alertLog:{}, notifSettings: DEFAULT_NOTIF_SETTINGS, groceryChecked:{}, workoutLogs:{}, checkins:{},
+  videoWatched:{}, firedAlerts:{}, alertLog:{}, notifSettings: DEFAULT_NOTIF_SETTINGS, groceryChecked:{}, workoutLogs:{}, checkins:{}, googleHealth:null,
 };
 
 function App() {
@@ -364,7 +369,7 @@ function App() {
           setData({ ...DEFAULT_DATA, ...parsed,
             notifSettings: { ...DEFAULT_NOTIF_SETTINGS, ...(parsed.notifSettings||{}) },
             videoWatched: parsed.videoWatched||{}, firedAlerts: parsed.firedAlerts||{}, alertLog: parsed.alertLog||{},
-            groceryChecked: parsed.groceryChecked||{}, workoutLogs: parsed.workoutLogs||{}, checkins: parsed.checkins||{} });
+            groceryChecked: parsed.groceryChecked||{}, workoutLogs: parsed.workoutLogs||{}, checkins: parsed.checkins||{}, googleHealth: parsed.googleHealth||null });
         }
       } catch(e) {}
       setLoaded(true);
@@ -428,6 +433,102 @@ function App() {
   function logCheckin(field, value) {
     setData(prev => ({ ...prev, checkins: { ...prev.checkins, [todayKey]: { ...(prev.checkins[todayKey]||{}), [field]: value } } }));
   }
+
+  // Google Health integration
+  const [googleTokenClient, setGoogleTokenClient] = useState(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleReady, setGoogleReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    function tryInit() {
+      if (cancelled) return;
+      if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+        const client = window.google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: GOOGLE_HEALTH_SCOPES,
+          callback: (resp) => {
+            if (resp && resp.access_token) {
+              fetchGoogleHealthData(resp.access_token);
+            } else {
+              showToast("Google Health connection failed");
+            }
+          },
+        });
+        setGoogleTokenClient(client);
+        setGoogleReady(true);
+      } else {
+        setTimeout(tryInit, 300);
+      }
+    }
+    tryInit();
+    return () => { cancelled = true; };
+  }, []);
+
+  function connectGoogleHealth() {
+    if (!googleTokenClient) { showToast("Google sign-in is still loading \u2014 try again in a moment"); return; }
+    googleTokenClient.requestAccessToken();
+  }
+
+  function extractValue(dp) {
+    if (!dp) return null;
+    const v = dp.value;
+    if (v == null) return null;
+    if (typeof v === "number") return v;
+    if (typeof v === "object") return v.intVal ?? v.doubleVal ?? v.value ?? null;
+    return null;
+  }
+
+  async function fetchGoogleHealthData(token) {
+    setGoogleLoading(true);
+    try {
+      const todayStart = new Date(today); todayStart.setHours(0,0,0,0);
+      const todayEnd = new Date(today); todayEnd.setHours(23,59,59,999);
+      const headers = { Authorization: `Bearer ${token}` };
+      const stepsFilter = `data_type.interval.start_time >= "${todayStart.toISOString()}" AND data_type.interval.start_time <= "${todayEnd.toISOString()}"`;
+
+      const [stepsRes, hrRes, sleepRes] = await Promise.all([
+        fetch(`${GOOGLE_HEALTH_BASE}/users/me/dataTypes/steps/dataPoints?pageSize=1000&filter=${encodeURIComponent(stepsFilter)}`, { headers }),
+        fetch(`${GOOGLE_HEALTH_BASE}/users/me/dataTypes/dailyRestingHeartRate/dataPoints?pageSize=1`, { headers }),
+        fetch(`${GOOGLE_HEALTH_BASE}/users/me/dataTypes/sleep/dataPoints?pageSize=1`, { headers }),
+      ]);
+
+      if (!stepsRes.ok && !hrRes.ok && !sleepRes.ok) {
+        showToast("Google Health sync failed \u2014 check console for details");
+        console.error("Google Health API errors", stepsRes.status, hrRes.status, sleepRes.status);
+        setGoogleLoading(false);
+        return;
+      }
+
+      const stepsJson = stepsRes.ok ? await stepsRes.json() : null;
+      const hrJson = hrRes.ok ? await hrRes.json() : null;
+      const sleepJson = sleepRes.ok ? await sleepRes.json() : null;
+
+      const stepsTotal = stepsJson && stepsJson.dataPoints ? stepsJson.dataPoints.reduce((s,dp)=>s+(extractValue(dp)||0),0) : null;
+      const restingHR = hrJson && hrJson.dataPoints && hrJson.dataPoints[0] ? extractValue(hrJson.dataPoints[0]) : null;
+      const sleepPoint = sleepJson && sleepJson.dataPoints && sleepJson.dataPoints[0] ? sleepJson.dataPoints[0] : null;
+      let sleepHours = null;
+      if (sleepPoint) {
+        const v = sleepPoint.value || {};
+        const mins = v.durationMinutes ?? v.duration ?? null;
+        if (mins != null) sleepHours = Math.round((mins/60)*10)/10;
+        else if (sleepPoint.startTime && sleepPoint.endTime) sleepHours = Math.round(((new Date(sleepPoint.endTime)-new Date(sleepPoint.startTime))/3600000)*10)/10;
+      }
+
+      setData(prev => ({ ...prev, googleHealth: {
+        lastSynced: new Date().toISOString(),
+        steps: stepsTotal, restingHR, sleepHours,
+        raw: { steps: stepsJson, hr: hrJson, sleep: sleepJson },
+      } }));
+      showToast("Synced with Google Health");
+    } catch (e) {
+      console.error(e);
+      showToast("Google Health sync failed \u2014 check console for details");
+    } finally {
+      setGoogleLoading(false);
+    }
+  }
+
   function exportData() {
     try {
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -583,7 +684,7 @@ function App() {
           {tab==="train" && <TrainTab sessions={sessions} completedToday={completedToday} toggleSession={toggleSession} today={today} weekNum={weekNum}
             dayLog={data.workoutLogs[todayKey]} onToggleSet={toggleSetDone} onSetWeight={setExerciseWeight} phase={phaseFor(today)}/>}
           {tab==="fuel" && <FuelTab macroTarget={macroTarget} macroSum={macroSum} mealsToday={mealsToday} toggleMeal={toggleMeal} mealFilter={mealFilter} setMealFilter={setMealFilter} groceryChecked={data.groceryChecked} toggleGrocery={toggleGrocery} resetGroceries={resetGroceries}/>}
-          {tab==="progress" && <ProgressTab data={data} weightInput={weightInput} setWeightInput={setWeightInput} waistInput={waistInput} setWaistInput={setWaistInput} bodyFatInput={bodyFatInput} setBodyFatInput={setBodyFatInput} logWeight={logWeight} weekNum={weekNum} clock={clock} exportData={exportData} importData={importData}/>}
+          {tab==="progress" && <ProgressTab data={data} weightInput={weightInput} setWeightInput={setWeightInput} waistInput={waistInput} setWaistInput={setWaistInput} bodyFatInput={bodyFatInput} setBodyFatInput={setBodyFatInput} logWeight={logWeight} weekNum={weekNum} clock={clock} exportData={exportData} importData={importData} connectGoogleHealth={connectGoogleHealth} googleLoading={googleLoading} logCheckin={logCheckin}/>}
           {tab==="learn" && <LearnTab ytWeek={ytWeek} weekNum={weekNum} today={today} videoWatched={data.videoWatched[todayKey]} markVideoWatched={markVideoWatched}/>}
           {tab==="alerts" && <AlertsTab data={data} today={today} todayKey={todayKey} clock={clock} waterToday={waterToday} adjustWater={adjustWater}
             updateNotifSettings={updateNotifSettings} toggleCategory={toggleCategory} requestBrowserNotifications={requestBrowserNotifications}/>}
@@ -1005,7 +1106,7 @@ function linearTrend(points) {
   return { slope, intercept };
 }
 
-function ProgressTab({ data, weightInput, setWeightInput, waistInput, setWaistInput, bodyFatInput, setBodyFatInput, logWeight, weekNum, clock, exportData, importData }) {
+function ProgressTab({ data, weightInput, setWeightInput, waistInput, setWaistInput, bodyFatInput, setBodyFatInput, logWeight, weekNum, clock, exportData, importData, connectGoogleHealth, googleLoading, logCheckin }) {
   const recent = data.weightLogs.slice(-10).reverse();
   const badgeList = [ {id:"First Session",label:"First Session",icon:"⚽"}, {id:"Week 1 Warrior",label:"7-Day Streak",icon:"🔥"}, {id:"Iron Consistency",label:"30-Day Streak",icon:"🛡️"}, {id:"Halfway There",label:"Reached Week 5",icon:"🏁"}, {id:"Century Club",label:"100 Sessions Logged",icon:"👑"} ];
   const phase = phaseFor(clock);
@@ -1048,6 +1149,30 @@ function ProgressTab({ data, weightInput, setWeightInput, waistInput, setWaistIn
 
   return (
     <div>
+      <SectionLabel>Google Health</SectionLabel>
+      <div className="rounded-xl p-3 mb-4" style={{ background:"#1C2733" }}>
+        {!data.googleHealth && (
+          <div>
+            <div className="text-[11px] mb-2" style={{ color:"#7C8B99" }}>Pull today's steps, resting heart rate, and sleep in from your Fitbit Air via Google Health.</div>
+            <button onClick={connectGoogleHealth} disabled={googleLoading} className="w-full py-2 rounded-lg font-bold text-sm" style={{ background:"#F2B705", color:"#101820" }}>{googleLoading ? "Connecting\u2026" : "Connect Google Health"}</button>
+          </div>
+        )}
+        {data.googleHealth && (
+          <div>
+            <Row label="Steps today" value={data.googleHealth.steps != null ? data.googleHealth.steps : "\u2014"}/>
+            <Row label="Resting heart rate" value={data.googleHealth.restingHR != null ? `${data.googleHealth.restingHR} bpm` : "\u2014"}/>
+            <Row label="Last sleep" value={data.googleHealth.sleepHours != null ? `${data.googleHealth.sleepHours} hrs` : "\u2014"}/>
+            <div className="text-[10px] mt-1" style={{ color:"#7C8B99" }}>Last synced {new Date(data.googleHealth.lastSynced).toLocaleTimeString()}</div>
+            <div className="flex gap-2 mt-3">
+              <button onClick={connectGoogleHealth} disabled={googleLoading} className="flex-1 py-2 rounded-lg font-bold text-xs" style={{ background:"#2A3946", color:"#F5F5F0" }}>{googleLoading ? "Syncing\u2026" : "Sync now"}</button>
+              {data.googleHealth.sleepHours != null && (
+                <button onClick={()=>logCheckin("sleep", data.googleHealth.sleepHours)} className="flex-1 py-2 rounded-lg font-bold text-xs" style={{ background:"#2E7D5B", color:"#fff" }}>Use as today's sleep</button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       <SectionLabel>Yearly Plan</SectionLabel>
       <div className="rounded-xl p-3 mb-4" style={{ background:"#1C2733" }}>
         {PHASES.map((p,i) => (
